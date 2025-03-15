@@ -114,7 +114,12 @@ class AuthClient:
             else:
                 raise Exception("❌ Authentication failed!")
         else:
-            raise Exception(f"❌ Request failed: {response.status_code}")
+            print("❌ Failed to authenticate!\nℹ️ It is possible that you may have logged through the app.\n🔁 You can re-run the script to verify the credentials.")
+            # reset .env
+            self._save_to_env("BIOMETRIC_DATA", "")
+            self._save_to_env("UUID", "")
+            self._save_to_env("MALSHAB_ID", "")
+            exit()
 
     def get_token(self):
         if not self.token or time.time() > float(self.expiration):
