@@ -18,36 +18,32 @@ class MitgiaisimAPI:
     # 2 - פניות שטופלו
     # 3 - כל הפניות
 
-    # def get_cases(self, case_type=3):
-    #     try:
-    #         all_cases = []
-    #         page = 1 # starting from page 1
-    #
-    #         while True:
-    #             url = f"{BASE_URL}/api/Inbox/GetCaseList?caseType={case_type}&page={page}"
-    #             headers = {"cookie": f"MobileAuth={self.auth.get_token()}"}
-    #             response = requests.get(url, headers=headers)
-    #             if response.status_code != 200:
-    #                 raise Exception(f"Failed to get cases: {response.status_code}")
-    #                 break
-    #
-    #             data = response.json()
-    #             if "caseList" in data:
-    #                 all_cases.extend(data["caseList"])
-    #
-    #             if not data.get("hasMoreData", False):
-    #                 break
-    #
-    #             page += 1 # next page
-    #
-    #         return {"caseList": all_cases}
-    #     except Exception as e:
-    #         print(f"Error: {e}")
-    #         return None
-
     def get_cases(self, case_type=3):
-        with open("cases.json", "r") as f:
-            return json.load(f)
+        try:
+            all_cases = []
+            page = 1 # starting from page 1
+
+            while True:
+                url = f"{BASE_URL}/api/Inbox/GetCaseList?caseType={case_type}&page={page}"
+                headers = {"cookie": f"MobileAuth={self.auth.get_token()}"}
+                response = requests.get(url, headers=headers)
+                if response.status_code != 200:
+                    raise Exception(f"Failed to get cases: {response.status_code}")
+                    break
+
+                data = response.json()
+                if "caseList" in data:
+                    all_cases.extend(data["caseList"])
+
+                if not data.get("hasMoreData", False):
+                    break
+
+                page += 1 # next page
+
+            return {"caseList": all_cases}
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
 
     def get_user_main_data(self):
         malshab_id = self._extract_malshab_id()
