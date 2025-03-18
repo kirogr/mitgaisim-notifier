@@ -8,8 +8,11 @@ class MitgiaisimMonitor:
         self.api = MitgiaisimAPI()
         self.notifier = Notifier()
         self.tracked_cases = {}
+        self.tracked_summons = {}
         self.tracked_scores = {}
         self.tracked_user_data = {}
+        self.tracked_questionnaires = {}
+        self.tracked_crm = {}
         self.check_interval = check_interval
         
         logging.basicConfig(
@@ -40,11 +43,34 @@ class MitgiaisimMonitor:
         self.logger.info("🔍 Checking for updates...")
 
         self._check_case_updates()
+        self._check_summon_updates()
         self._check_quality_updates()
         self._check_user_data_updates()
+        self._check_questionaire_updates()
+        self._check_crm_updates()
+
+    def _check_crm_updates(self):
+        has_update = self.api.get_has_crm_update()
+
+        if not has_update or "isUpdated" not in has_update:
+            self.logger.warning("⚠️ Failed to retrieve CRM update status")
+            return
+
+        if not self.tracked_crm:
+            self.tracked_crm = has_update["isUpdated"]
+            return
+
+        if not self.tracked_crm and has_update["isUpdated"]:
+            title = "📢 CRM Update"
+            message = "A new CRM message is available!" # a crm message in inbox , or any other updates in crm.
+            self.notifier.send_notification(title, message)
+
+        self.tracked_crm = has_update["isUpdated"]
+
 
     def _check_case_updates(self):
         cases = self.api.get_cases()
+
         if not cases or "caseList" not in cases:
             self.logger.warning("⚠️ Failed to retrieve case data")
             return
@@ -58,23 +84,25 @@ class MitgiaisimMonitor:
             if case_number in self.tracked_cases:
                 self._detect_case_changes(self.tracked_cases[case_number], case)
             else:
+                # New case detected
                 title = f"New Case Opened: {case_number}"
                 message = f"📌 Subject: {case['subject']}\n📅 Created: {case['creationDate']}\n📞 Contact: {case['channel']}\n🔍 Status: {case['statusDescription']}"
                 self.notifier.send_notification(title, message)
 
-            self.tracked_cases[case_number] = case
-
-
+            self.tracked_cases[case_number] = case # store case data
 
         previous_case_numbers = set(self.tracked_cases.keys())
         deleted_cases = previous_case_numbers - current_case_numbers
 
         for case_number in deleted_cases:
-            title = f"Case Deleted: {case_number} | {self.tracked_cases[case_number]['mainSubject']}"
-            message = f"The case with number {case_number} has been removed from the system."
-            self.notifier.send_notification(title, message)
-            del self.tracked_cases[case_number]  # remove from tracked cases
-
+            if self.tracked_cases[case_number].get("checkedForRemoval", 0) < 2:
+                self.tracked_cases[case_number]["checkedForRemoval"] = self.tracked_cases[case_number].get(
+                    "checkedForRemoval", 0) + 1
+            else:
+                title = f"Case Deleted: {case_number} | {self.tracked_cases[case_number]['mainSubject']}"
+                message = f"The case with number {case_number} has been removed from the system."
+                self.notifier.send_notification(title, message)
+                del self.tracked_cases[case_number]  # remove from tracked cases
 
     def _detect_case_changes(self, old_case, new_case):
         updates = []
@@ -86,6 +114,7 @@ class MitgiaisimMonitor:
             "statusDescription",
             "lastUpdateDate",
             "answer",
+            "status",
             "slaDate"
         ]
 
@@ -105,6 +134,52 @@ class MitgiaisimMonitor:
             message = "\n".join(updates)
             self.notifier.send_notification(title, message)
 
+    def _check_summon_updates(self):
+        summons = self.api.get_all_summons()
+        if not summons or "allSummons" not in summons:
+            self.logger.warning("⚠️ Failed to retrieve summons data")
+            return
+
+        new_summons = {s["summonId"]: s for s in summons["allSummons"]}
+
+        if not self.tracked_summons:
+            self.tracked_summons = new_summons
+            return
+
+        for summon_id, summon_details in new_summons.items():
+            if summon_id not in self.tracked_summons:
+                title = f"📌 New Summon: {summon_details['summonSubject']}"
+                message = (
+                    f"📅 Date: {summon_details['startDate']}\n"
+                    f"📍 Location: {summon_details['locationName']}"
+                )
+                self.notifier.send_notification(title, message)
+
+        for summon_id in self.tracked_summons:
+            if summon_id not in new_summons:
+                old_details = self.tracked_summons[summon_id]
+                title = f"🗑️ Summon Removed: {old_details['summonSubject']}"
+                message = (
+                    f"📅 Date: {old_details['startDate']}\n"
+                    f"📍 Location: {old_details['locationName']}"
+                )
+                self.notifier.send_notification(title, message)
+
+        for summon_id, new_details in new_summons.items():
+            if summon_id in self.tracked_summons:
+                old_details = self.tracked_summons[summon_id]
+                summon_updates = []
+
+                for field in ["startDate", "endDate", "summonSubject", "locationAddress", "locationName", "approved", "read"]:
+                    if old_details.get(field) != new_details.get(field):
+                        summon_updates.append(f"{field} changed: {old_details.get(field)} → {new_details.get(field)}")
+
+                if summon_updates:
+                    title = f"🔄 Summon Updated: {new_details['summonSubject']}"
+                    message = "\n".join(summon_updates)
+                    self.notifier.send_notification(title, message)
+
+        self.tracked_summons = new_summons
 
     def _check_quality_updates(self):
         quality_data = self.api.get_user_quality_data()
@@ -127,20 +202,47 @@ class MitgiaisimMonitor:
         self._detect_user_data_changes(self.tracked_user_data, user_data)
         self.tracked_user_data = user_data
 
-    def _detect_case_changes(self, old_case, new_case):
+    def _check_questionaire_updates(self):
+        questionaire = self.api.get_questionaire_data()
+        if not questionaire:
+            self.logger.warning("⚠️ Failed to retrieve questionaire data")
+            return
+
+        self._detect_questionaire_changes(questionaire)
+
+    def _detect_questionaire_changes(self, new_questionnaire):
         updates = []
+        new_questionnaires = {q["name"]: q for q in new_questionnaire.get("questionnaire", [])}
 
-        if old_case["status"] != new_case["status"]:
-            updates.append(f"Status changed: {old_case['statusDescription']} → {new_case['statusDescription']}")
+        if not self.tracked_questionnaires:
+            self.tracked_questionnaires = new_questionnaires
+            return
 
-        if old_case["lastUpdateDate"] != new_case["lastUpdateDate"]:
-            updates.append(f"Last update changed: {old_case['lastUpdateDate']} → {new_case['lastUpdateDate']}")
+        old_questionnaires = self.tracked_questionnaires
+
+        for name, details in new_questionnaires.items():
+            if name not in old_questionnaires:
+                updates.append(f"📌 New Questionnaire Added: {name}")
+
+        for name in old_questionnaires:
+            if name not in new_questionnaires:
+                updates.append(f"🗑️ Questionnaire Removed: {name}")
+
+        for name, new_details in new_questionnaires.items():
+            if name in old_questionnaires:
+                old_details = old_questionnaires[name]
+                for field in ["endDate", "isFinished", "isStarted"]:
+                    if old_details.get(field) != new_details.get(field):
+                        updates.append(f"🔄 {name} {field} changed: {old_details.get(field)} → {new_details.get(field)}")
 
         if updates:
-            title = f"📋 Case Update: {new_case['caseNumber']} | {new_case['mainSubject']}"
+            title = "📋 Questionnaire Update"
             message = "\n".join(updates)
             self.notifier.send_notification(title, message)
-            self.logger.info(f"📝 Case {new_case['caseNumber']} updated: {len(updates)} changes")
+            self.logger.info(f"📋 Questionnaire update detected: {len(updates)} changes")
+
+        # Update stored state
+        self.tracked_questionnaires = new_questionnaires
 
     def _detect_quality_changes(self, old_score, new_score):
         updates = []
